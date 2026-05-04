@@ -48,15 +48,23 @@ if GEMINI_API_KEY:
 else:
     print("[INIT] ⚠️ 沒有 Gemini API Key")
 
-# 初始化 LINE Bot
+# 初始化 LINE Bot（使用假 handler 避免 None 錯誤）
 if LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
     line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
     handler = WebhookHandler(LINE_CHANNEL_SECRET)
     print("[INIT] LINE Bot 已初始化")
 else:
-    print("[INIT] ⚠️ LINE 環境變數未設定！")
+    print("[INIT] ⚠️ LINE 環境變數未設定！使用假 handler")
     line_bot_api = None
-    handler = None
+    # 建立假的 handler 避免 @handler.add 報錯
+    class FakeHandler:
+        def add(self, *args, **kwargs):
+            def decorator(func):
+                return func
+            return decorator
+        def handle(self, *args, **kwargs):
+            pass
+    handler = FakeHandler()
 
 # 資料庫路徑 - 使用相對路徑，避免 Render 上路徑問題
 DB_PATH = os.path.join(os.path.dirname(__file__), 'moto_repair.db')
