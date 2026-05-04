@@ -353,7 +353,7 @@ def test():
 
 @app.route("/webhook", methods=['POST', 'GET'])
 def webhook():
-    """LINE Webhook 接收訊息"""
+    """LINE Webhook 接收訊息 - 始終回傳 200 確保 LINE 不會切斷連線"""
     if request.method == 'GET':
         return 'Webhook is running! 🏍️', 200
     
@@ -361,22 +361,24 @@ def webhook():
     body = request.get_data(as_text=True)
     signature = request.headers.get('X-Line-Signature', '')
     
-    # 如果沒有 signature（LINE 測試時），直接回 200
-    if not signature:
-        return 'OK', 200
+    # 記錄請求以便除錯
+    print(f"[WEBHOOK] Received request, body length: {len(body)}, signature present: {bool(signature)}")
     
-    # 驗證 signature 格式
-    if len(signature) < 10:
+    # 沒有 signature 也回 200（LINE 測試用）
+    if not signature:
+        print("[WEBHOOK] No signature, returning 200")
         return 'OK', 200
     
     try:
         handler.handle(body, signature)
+        print("[WEBHOOK] Handler processed successfully")
     except InvalidSignatureError:
-        return 'Invalid signature', 400
+        # Signature 錯誤也回 200，但記錄下來
+        print(f"[WEBHOOK] Invalid signature, but returning 200 to keep LINE connected")
     except Exception as e:
-        print(f"Webhook error: {e}")
-        return 'OK', 200
+        print(f"[WEBHOOK] Error: {e}")
     
+    # 始終回傳 200，避免 LINE 認為 Webhook 故障
     return 'OK', 200
 
 @handler.add(MessageEvent, message=TextMessage)
