@@ -107,13 +107,13 @@ def diagnose(text):
     text_lower = text.lower()
     
     # 先嘗試 Gemini AI 診斷（如果不是指令）
-    if not any(k in text_lower for k in ["價格", "廠商", "推薦", "附近", "幫助", "說明", "功能", "使用", "紀錄", "歷史", "評價", "打分", "回饋"]):
+    if not any(k in text_lower for k in ["價格", "廠商", "推薦", "附近", "幫助", "說明", "功能", "使用", "紀錄", "歷史", "評價", "打分", "回饋", "💰", "🏪", "❓", "📖", "ℹ️", "📋", "⭐", "⭐️", "🔧"]):
         gemini_result = gemini_diagnose(text)
         if gemini_result:
             return f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 輸入「價格查詢」查看參考價格"
     
     # 關鍵字匹配（原有功能）
-    if any(k in text_lower for k in ["價格", "多少錢", "費用", "價錢", "報價", "成本", "開銷"]):
+    if any(k in text_lower for k in ["價格", "多少錢", "費用", "價錢", "報價", "成本", "開銷", "💰"]):
         return """💰 常見維修參考價格
 
 電系類：
@@ -134,7 +134,7 @@ def diagnose(text):
 
 ⚠️ 以上為參考價，實際以維修廠報價為準"""
 
-    elif any(k in text_lower for k in ["廠商", "推薦", "附近", "維修廠", "車行", "店家", "哪裡修", "去哪修", "修車"]):
+    elif any(k in text_lower for k in ["廠商", "推薦", "附近", "維修廠", "車行", "店家", "哪裡修", "去哪修", "修車", "🏪"]):
         return """🏍️ 推薦維修廠
 
 ✅ 順欣車業
@@ -152,7 +152,7 @@ def diagnose(text):
    📍 新北市中和區中山路三段 120 號
    📞 02-29456789"""
 
-    elif any(k in text_lower for k in ["幫助", "說明", "功能", "使用"]):
+    elif any(k in text_lower for k in ["幫助", "說明", "功能", "使用", "❓", "📖", "ℹ️"]):
         return """🏍️ 柴師傅使用說明
 
 【快速診斷】
@@ -170,10 +170,10 @@ def diagnose(text):
 
 ⚠️ 以上為AI初步估價，實際價格以現場檢測為準"""
 
-    elif any(k in text_lower for k in ["紀錄", "歷史"]):
+    elif any(k in text_lower for k in ["紀錄", "歷史", "📋"]):
         return "📋 您還沒有維修紀錄\n\n快去找柴師傅診斷吧！🔧"
 
-    elif any(k in text_lower for k in ["評價", "打分", "回饋"]):
+    elif any(k in text_lower for k in ["評價", "打分", "回饋", "⭐", "⭐️"]):
         return """⭐ 維修廠評價
 
 請告訴我：
