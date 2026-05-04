@@ -429,6 +429,24 @@ def webhook():
     handler_type = type(handler).__name__
     print(f"[WEBHOOK] Handler type: {handler_type}")
     
+    # 如果是 FakeHandler，直接處理訊息（不驗證 signature）
+    if handler_type == 'FakeHandler':
+        print("[WEBHOOK] Using FakeHandler - processing without signature validation")
+        try:
+            data = json.loads(body)
+            if 'events' in data and len(data['events']) > 0:
+                event = data['events'][0]
+                if event.get('type') == 'message' and event.get('message', {}).get('type') == 'text':
+                    user_id = event['source']['userId']
+                    text = event['message']['text']
+                    reply_token = event['replyToken']
+                    print(f"[FAKE] Processing: user={user_id}, text={text}")
+                    # 直接呼叫處理函數
+                    process_message(user_id, text, reply_token)
+        except Exception as e:
+            print(f"[FAKE] Error: {e}")
+        return 'OK', 200
+    
     try:
         handler.handle(body, signature)
         print("[WEBHOOK] Handler processed successfully")
@@ -442,6 +460,115 @@ def webhook():
     
     # 始終回傳 200，避免 LINE 認為 Webhook 故障
     return 'OK', 200
+
+def process_message(user_id, text, reply_token):
+    """直接處理訊息（不使用 LINE handler）"""
+    print(f"[PROCESS] user={user_id}, text={text}")
+    
+    # 記錄對話
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute('INSERT INTO conversations (user_id, symptom) VALUES (?, ?)', (user_id, text))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        print(f"[DB] 記錄對話失敗: {e}")
+    
+    # 指令判斷 - 支援模糊匹配（包含關鍵字即可）
+    text_lower = text.lower().strip()
+    
+    # 預設回覆
+    reply = None
+    
+    if any(k in text_lower for k in ["附近廠商", "維修廠", "推薦", "廠商"]):
+        reply = get_nearby_shops()
+    elif any(k in text_lower for k in ["幫助", "help", "說明", "使用", "功能", "指令"]):
+        reply = """🏍️ 柴師傅使用說明
+
+【快速診斷】
+直接描述您的機車問題，例如：
+• 「發不動，有喀喀聲」
+• 「起步有異音」
+• 「煞車變很軟」
+• 「最近很耗油」
+
+【功能選單】
+🔧 症狀診斷 — AI 智能分析問題
+💰 價格查詢 — 常見維修價目表
+🏪 附近廠商 — 推薦合作維修廠
+📋 維修紀錄 — 查看您的歷史紀錄
+⭐ 評價回饋 — 給維修廠評分
+
+【注意事項】
+⚠️ 以上為AI初步估價，實際價格以現場檢測為準
+
+有問題隨時問我！🔧"""
+    elif any(k in text_lower for k in ["價格", "價錢", "多少錢", "費用", "報價"]):
+        reply = """💰 常見維修參考價格
+
+電系類：
+• 電瓶更換：$800 - $1,500
+• 啟動馬達：$1,500 - $3,000
+• 火星塞：$200 - $500
+
+傳動類：
+• 普利珠：$800 - $1,500
+• 離合器：$1,200 - $2,500
+• 傳動皮帶：$400 - $800
+
+煞車類：
+• 來令片：$300 - $800
+• 煞車油：$200 - $400
+• 碟盤：$800 - $1,500
+
+引擎類：
+• 換機油：$300 - $600
+• 空濾更換：$200 - $500
+• 墊片維修：$500 - $2,000
+
+⚠️ 以上為參考價，實際以維修廠報價為準"""
+    elif any(k in text_lower for k in ["症狀", "診斷", "問題", "故障", "壞掉", "怎麼辦"]):
+        # 使用關鍵字匹配診斷
+        diagnosis = diagnose_symptom(text)
+        reply = format_diagnosis_reply(diagnosis)
+    elif any(k in text_lower for k in ["紀錄", "歷史", "我的紀錄", "維修紀錄"]):
+        reply = get_user_history(user_id)
+    elif any(k in text_lower for k in ["評價", "打分", "回饋", "滿意度", "評分"]):
+        reply = """⭐ 維修廠評價
+
+請告訴我：
+1. 您去了哪家維修廠？
+2. 維修項目是什麼？
+3. 實際花費多少？
+4. 滿意度 1-5 星？
+
+格式範例：
+「大台北機車，換電瓶，1200元，5星」
+
+小柴子會幫您記錄，讓其他車友參考！📝"""
+    else:
+        # AI 診斷：先嘗試 Gemini，失敗則用關鍵字匹配
+        gemini_result = gemini_diagnose(text)
+        if gemini_result:
+            reply = f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 也想看傳統診斷？輸入「傳統診斷」"
+        else:
+            diagnosis = diagnose_symptom(text)
+            reply = format_diagnosis_reply(diagnosis)
+    
+    # 發送回覆
+    if reply and line_bot_api:
+        try:
+            from linebot.models import TextSendMessage
+            line_bot_api.reply_message(
+                reply_token,
+                TextSendMessage(text=reply)
+            )
+            print(f"[PROCESS] Reply sent successfully")
+        except Exception as e:
+            print(f"[PROCESS] Failed to send reply: {e}")
+    else:
+        print(f"[PROCESS] No reply or line_bot_api not available")
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
