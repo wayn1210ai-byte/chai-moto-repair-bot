@@ -412,6 +412,8 @@ def webhook():
     
     # 記錄請求以便除錯
     print(f"[WEBHOOK] Received request, body length: {len(body)}, signature present: {bool(signature)}")
+    print(f"[WEBHOOK] Body preview: {body[:200]}")
+    print(f"[WEBHOOK] Signature: {signature[:50]}..." if signature else "[WEBHOOK] No signature")
     
     # 沒有 signature 也回 200（LINE 測試用）
     if not signature:
@@ -423,6 +425,10 @@ def webhook():
         print("[WEBHOOK] Handler not initialized, returning 200")
         return 'OK', 200
     
+    # 檢查 handler 類型
+    handler_type = type(handler).__name__
+    print(f"[WEBHOOK] Handler type: {handler_type}")
+    
     try:
         handler.handle(body, signature)
         print("[WEBHOOK] Handler processed successfully")
@@ -431,6 +437,8 @@ def webhook():
         print(f"[WEBHOOK] Invalid signature, but returning 200 to keep LINE connected")
     except Exception as e:
         print(f"[WEBHOOK] Error: {e}")
+        import traceback
+        traceback.print_exc()
     
     # 始終回傳 200，避免 LINE 認為 Webhook 故障
     return 'OK', 200
