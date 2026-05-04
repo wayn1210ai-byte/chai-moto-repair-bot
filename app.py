@@ -357,6 +357,10 @@ def webhook():
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
     
+    # 如果沒有 signature（LINE 測試時），直接回 200
+    if not signature:
+        return 'OK', 200
+    
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
