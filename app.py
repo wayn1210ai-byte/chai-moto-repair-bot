@@ -7,6 +7,7 @@
 import os
 import json
 import sqlite3
+import openai
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -29,6 +30,10 @@ app = Flask(__name__)
 # LINE Bot 設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', 'your-token')
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', 'your-secret')
+
+# OpenAI 設定
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
+openai.api_key = OPENAI_API_KEY
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -217,6 +222,54 @@ def diagnose_symptom(symptom_text, bike_model="", bike_age=""):
         "bike_age": bike_age
     }
 
+# ============ GPT AI 診斷 ============
+
+def gpt_diagnose(symptom_text, bike_model="", bike_age=""):
+    """使用 GPT-4 進行智能診斷"""
+    if not OPENAI_API_KEY:
+        return None
+    
+    try:
+        bike_info = f"\n車型：{bike_model}" if bike_model else ""
+        bike_info += f"\n車齡：{bike_age}" if bike_age else ""
+        
+        prompt = f"""你是一位專業的機車維修技師，有20年經驗。請根據用戶描述的症狀進行初步診斷。
+
+用戶描述：{symptom_text}{bike_info}
+
+請用繁體中文回答，格式如下：
+🔍 **初步診斷**：
+[簡短說明最可能的問題]
+
+💰 **估價範圍**：
+- 零件費：$XXX - $XXX
+- 工資：$XXX - $XXX
+- 總計約：$XXX - $XXX
+
+⚠️ **建議**：
+[是否需要立即維修，或可以觀察]
+
+🛠️ **可能維修項目**：
+1. [項目1]
+2. [項目2]
+
+請務必提醒：此為AI初步估價，實際價格以現場檢測為準。"""
+
+        response = openai.ChatCompletion.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "你是一位親切專業的台灣機車維修技師，用繁體中文回答。"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.7,
+            max_tokens=800
+        )
+        
+        return response.choices[0].message.content
+    except Exception as e:
+        print(f"GPT診斷錯誤: {e}")
+        return None
+
 # ============ 訊息格式化 ============
 
 def format_diagnosis_reply(diagnosis):
@@ -329,7 +382,8 @@ def handle_text_message(event):
 我也能幫您：
 • 輸入「附近廠商」找維修廠
 • 輸入「價格查詢」看常見維修價格
-• 輸入「我的車籍」記錄愛車資料
+• 輸入「傳統診斷」使用關鍵字匹配
+• 直接描述問題，AI 智能診斷
 
 有問題隨時問我！🔧"""
     elif text in ["價格查詢", "常見價格"]:
@@ -356,10 +410,18 @@ def handle_text_message(event):
 • 墊片維修：$500 - $2,000
 
 ⚠️ 以上為參考價，實際以維修廠報價為準"""
-    else:
-        # AI 診斷
+    elif text == "傳統診斷":
+        # 使用關鍵字匹配診斷
         diagnosis = diagnose_symptom(text)
         reply = format_diagnosis_reply(diagnosis)
+    else:
+        # AI 診斷：先嘗試 GPT，失敗則用關鍵字匹配
+        gpt_result = gpt_diagnose(text)
+        if gpt_result:
+            reply = f"🤖 **AI 智能診斷**\n\n{gpt_result}\n\n---\n💡 也想看傳統診斷？輸入「傳統診斷」"
+        else:
+            diagnosis = diagnose_symptom(text)
+            reply = format_diagnosis_reply(diagnosis)
     
     # 發送回覆
     line_bot_api.reply_message(
