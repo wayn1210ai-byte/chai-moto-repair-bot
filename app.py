@@ -27,6 +27,9 @@ load_dotenv()
 
 app = Flask(__name__)
 
+# 關閉 Flask 自動 JSON 解析，避免 400 錯誤
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
+
 # LINE Bot 設定
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', 'your-token')
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', 'your-secret')
@@ -354,19 +357,27 @@ def webhook():
     if request.method == 'GET':
         return 'Webhook is running! 🏍️', 200
     
-    signature = request.headers.get('X-Line-Signature', '')
+    # 手動取得 raw body，避免 Flask 自動解析 JSON
     body = request.get_data(as_text=True)
+    signature = request.headers.get('X-Line-Signature', '')
     
     # 如果沒有 signature（LINE 測試時），直接回 200
     if not signature:
         return 'OK', 200
     
+    # 驗證 signature 格式
+    if len(signature) < 10:
+        return 'OK', 200
+    
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
-        abort(400)
+        return 'Invalid signature', 400
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return 'OK', 200
     
-    return 'OK'
+    return 'OK', 200
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_text_message(event):
@@ -381,10 +392,12 @@ def handle_text_message(event):
     conn.commit()
     conn.close()
     
-    # 指令判斷
-    if text in ["附近廠商", "維修廠", "推薦", "🏪 附近廠商"]:
+    # 指令判斷 - 支援模糊匹配（包含關鍵字即可）
+    text_lower = text.lower().strip()
+    
+    if any(k in text_lower for k in ["附近廠商", "維修廠", "推薦", "廠商"]):
         reply = get_nearby_shops()
-    elif text in ["幫助", "help", "?", "說明", "❓ 使用說明"]:
+    elif any(k in text_lower for k in ["幫助", "help", "說明", "使用", "功能", "指令"]):
         reply = """🏍️ 柴師傅使用說明
 
 【快速診斷】
@@ -405,7 +418,7 @@ def handle_text_message(event):
 ⚠️ 以上為AI初步估價，實際價格以現場檢測為準
 
 有問題隨時問我！🔧"""
-    elif text in ["價格查詢", "常見價格", "💰 價格查詢"]:
+    elif any(k in text_lower for k in ["價格", "價錢", "多少錢", "費用", "報價"]):
         reply = """💰 常見維修參考價格
 
 電系類：
@@ -429,13 +442,13 @@ def handle_text_message(event):
 • 墊片維修：$500 - $2,000
 
 ⚠️ 以上為參考價，實際以維修廠報價為準"""
-    elif text in ["傳統診斷", "🔧 症狀診斷"]:
+    elif any(k in text_lower for k in ["症狀", "診斷", "問題", "故障", "壞掉", "怎麼辦"]):
         # 使用關鍵字匹配診斷
         diagnosis = diagnose_symptom(text)
         reply = format_diagnosis_reply(diagnosis)
-    elif text in ["📋 維修紀錄", "我的紀錄", "歷史紀錄"]:
+    elif any(k in text_lower for k in ["紀錄", "歷史", "我的紀錄", "維修紀錄"]):
         reply = get_user_history(user_id)
-    elif text in ["⭐ 評價回饋", "評價", "打分"]:
+    elif any(k in text_lower for k in ["評價", "打分", "回饋", "滿意度", "評分"]):
         reply = """⭐ 維修廠評價
 
 請告訴我：
