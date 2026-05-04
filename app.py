@@ -382,25 +382,30 @@ def handle_text_message(event):
     conn.close()
     
     # 指令判斷
-    if text in ["附近廠商", "維修廠", "推薦"]:
+    if text in ["附近廠商", "維修廠", "推薦", "🏪 附近廠商"]:
         reply = get_nearby_shops()
-    elif text in ["幫助", "help", "?", "說明"]:
+    elif text in ["幫助", "help", "?", "說明", "❓ 使用說明"]:
         reply = """🏍️ 柴師傅使用說明
 
+【快速診斷】
 直接描述您的機車問題，例如：
 • 「發不動，有喀喀聲」
 • 「起步有異音」
 • 「煞車變很軟」
 • 「最近很耗油」
 
-我也能幫您：
-• 輸入「附近廠商」找維修廠
-• 輸入「價格查詢」看常見維修價格
-• 輸入「傳統診斷」使用關鍵字匹配
-• 直接描述問題，AI 智能診斷
+【功能選單】
+🔧 症狀診斷 — AI 智能分析問題
+💰 價格查詢 — 常見維修價目表
+🏪 附近廠商 — 推薦合作維修廠
+📋 維修紀錄 — 查看您的歷史紀錄
+⭐ 評價回饋 — 給維修廠評分
+
+【注意事項】
+⚠️ 以上為AI初步估價，實際價格以現場檢測為準
 
 有問題隨時問我！🔧"""
-    elif text in ["價格查詢", "常見價格"]:
+    elif text in ["價格查詢", "常見價格", "💰 價格查詢"]:
         reply = """💰 常見維修參考價格
 
 電系類：
@@ -424,10 +429,25 @@ def handle_text_message(event):
 • 墊片維修：$500 - $2,000
 
 ⚠️ 以上為參考價，實際以維修廠報價為準"""
-    elif text == "傳統診斷":
+    elif text in ["傳統診斷", "🔧 症狀診斷"]:
         # 使用關鍵字匹配診斷
         diagnosis = diagnose_symptom(text)
         reply = format_diagnosis_reply(diagnosis)
+    elif text in ["📋 維修紀錄", "我的紀錄", "歷史紀錄"]:
+        reply = get_user_history(user_id)
+    elif text in ["⭐ 評價回饋", "評價", "打分"]:
+        reply = """⭐ 維修廠評價
+
+請告訴我：
+1. 您去了哪家維修廠？
+2. 維修項目是什麼？
+3. 實際花費多少？
+4. 滿意度 1-5 星？
+
+格式範例：
+「大台北機車，換電瓶，1200元，5星」
+
+小柴子會幫您記錄，讓其他車友參考！📝"""
     else:
         # AI 診斷：先嘗試 Gemini，失敗則用關鍵字匹配
         gemini_result = gemini_diagnose(text)
@@ -455,6 +475,31 @@ def handle_location_message(event):
         event.reply_token,
         TextSendMessage(text=reply)
     )
+
+def get_user_history(user_id):
+    """取得用戶維修歷史"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute('''
+        SELECT symptom, created_at FROM conversations 
+        WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
+    ''', (user_id,))
+    
+    records = c.fetchall()
+    conn.close()
+    
+    if not records:
+        return "📋 您還沒有維修紀錄\n\n快去找柴師傅診斷吧！🔧"
+    
+    reply = "📋 您的維修紀錄\n"
+    reply += f"{'='*30}\n\n"
+    
+    for i, (symptom, created_at) in enumerate(records, 1):
+        reply += f"{i}. {symptom}\n"
+        reply += f"   時間：{created_at}\n\n"
+    
+    return reply
 
 # ============ 啟動 ============
 
