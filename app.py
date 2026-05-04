@@ -7,6 +7,7 @@
 import os
 import json
 import sqlite3
+import google.generativeai as genai
 from flask import Flask, request
 from linebot import LineBotApi
 from linebot.models import TextSendMessage
@@ -21,6 +22,14 @@ GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
 print(f"[INIT] TOKEN長度: {len(LINE_CHANNEL_ACCESS_TOKEN)}")
 print(f"[INIT] SECRET長度: {len(LINE_CHANNEL_SECRET)}")
 print(f"[INIT] GEMINI長度: {len(GEMINI_API_KEY)}")
+
+# 初始化 Gemini
+if GEMINI_API_KEY:
+    try:
+        genai.configure(api_key=GEMINI_API_KEY)
+        print("[INIT] Gemini 設定成功")
+    except Exception as e:
+        print(f"[INIT] Gemini 設定失敗: {e}")
 
 # 初始化 LINE Bot
 line_bot_api = None
@@ -47,12 +56,63 @@ def init_db():
     conn.commit()
     conn.close()
     print("[INIT] 資料庫初始化完成")
+# ============ Gemini AI 診斷 ============
+
+def gemini_diagnose(text):
+    """使用 Google Gemini 進行智能診斷"""
+    if not GEMINI_API_KEY:
+        return None
+    
+    try:
+        prompt = f"""你是一位專業的機車維修技師，有20年經驗。請根據用戶描述的症狀進行初步診斷。
+
+用戶描述：{text}
+
+請用繁體中文回答，格式如下：
+🔍 **初步診斷**：
+[簡短說明最可能的問題]
+
+💰 **估價範圍**：
+- 零件費：$XXX - $XXX
+- 工資：$XXX - $XXX
+- 總計約：$XXX - $XXX
+
+⚠️ **建議**：
+[是否需要立即維修，或可以觀察]
+
+🛠️ **可能維修項目**：
+1. [項目1]
+2. [項目2]
+
+請務必提醒：此為AI初步估價，實際價格以現場檢測為準。"""
+
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.7,
+                max_output_tokens=800
+            )
+        )
+        
+        return response.text
+    except Exception as e:
+        print(f"[GEMINI] 診斷錯誤: {e}")
+        return None
 
 # ============ 診斷邏輯 ============
+
 def diagnose(text):
-    """簡易診斷"""
+    """診斷邏輯 - 先嘗試 Gemini，失敗則用關鍵字"""
     text_lower = text.lower()
     
+    # 先嘗試 Gemini AI 診斷（如果不是指令）
+    if not any(k in text_lower for k in ["價格", "廠商", "推薦", "附近", "幫助", "說明", "功能", "使用", "紀錄", "歷史", "評價", "打分", "回饋"]):
+        gemini_result = gemini_diagnose(text)
+        if gemini_result:
+            return f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 輸入「價格查詢」查看參考價格"
+    
+    # 關鍵字匹配（原有功能）
     if any(k in text_lower for k in ["價格", "多少錢", "費用"]):
         return """💰 常見維修參考價格
 
