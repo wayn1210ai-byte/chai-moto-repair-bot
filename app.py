@@ -113,7 +113,7 @@ def diagnose(text):
             return f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 輸入「價格查詢」查看參考價格"
     
     # 關鍵字匹配（原有功能）
-    if any(k in text_lower for k in ["價格", "多少錢", "費用"]):
+    if any(k in text_lower for k in ["價格", "多少錢", "費用", "價錢", "報價", "成本", "開銷"]):
         return """💰 常見維修參考價格
 
 電系類：
@@ -134,7 +134,7 @@ def diagnose(text):
 
 ⚠️ 以上為參考價，實際以維修廠報價為準"""
 
-    elif any(k in text_lower for k in ["廠商", "推薦", "附近"]):
+    elif any(k in text_lower for k in ["廠商", "推薦", "附近", "維修廠", "車行", "店家", "哪裡修", "去哪修", "修車"]):
         return """🏍️ 推薦維修廠
 
 ✅ 順欣車業
