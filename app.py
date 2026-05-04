@@ -1,0 +1,390 @@
+#!/usr/bin/env python3
+"""
+柴師傅 - 機車維修估價 LINE 機器人
+老柴老師的創業項目 MVP
+"""
+
+import os
+import json
+import sqlite3
+from datetime import datetime
+from flask import Flask, request, abort
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import (
+    MessageEvent, TextMessage, TextSendMessage,
+    QuickReply, QuickReplyButton, MessageAction,
+    LocationMessage, LocationSendMessage,
+    TemplateSendMessage, ButtonsTemplate, URITemplateAction,
+    FlexSendMessage, BubbleContainer, BoxComponent, TextComponent,
+    CarouselContainer
+)
+from dotenv import load_dotenv
+
+# 載入環境變數
+load_dotenv()
+
+app = Flask(__name__)
+
+# LINE Bot 設定
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', 'your-token')
+LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', 'your-secret')
+
+line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(LINE_CHANNEL_SECRET)
+
+# 資料庫路徑
+DB_PATH = '/home/wayn1210/chai-moto-bot/moto_repair.db'
+
+# ============ 資料庫操作 ============
+
+def init_db():
+    """初始化資料庫"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # 症狀關鍵字表
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS symptoms (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT NOT NULL,
+            category TEXT,
+            possible_issues TEXT,
+            price_low INTEGER,
+            price_high INTEGER,
+            probability INTEGER,
+            parts TEXT,
+            notes TEXT
+        )
+    ''')
+    
+    # 維修廠表
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS shops (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            address TEXT,
+            phone TEXT,
+            lat REAL,
+            lng REAL,
+            rating REAL DEFAULT 0,
+            review_count INTEGER DEFAULT 0,
+            specialties TEXT,
+            is_verified BOOLEAN DEFAULT 0,
+            is_active BOOLEAN DEFAULT 1
+        )
+    ''')
+    
+    # 對話紀錄
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS conversations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            symptom TEXT,
+            diagnosis TEXT,
+            price_estimate TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    # 價格回報
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS price_reports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            shop_id INTEGER,
+            service TEXT,
+            actual_price INTEGER,
+            satisfaction INTEGER,
+            notes TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+    print("✅ 資料庫初始化完成")
+
+def init_sample_data():
+    """載入初始資料"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # 檢查是否已有資料
+    c.execute("SELECT COUNT(*) FROM symptoms")
+    if c.fetchone()[0] > 0:
+        conn.close()
+        return
+    
+    # 載入症狀資料
+    symptoms_data = [
+        ("發不動", "電系", json.dumps(["電瓶沒電", "啟動馬達故障", "點火系統問題"]), 800, 1500, 70, json.dumps(["電瓶", "啟動馬達"]), "檢查電瓶電壓是否低於 12V"),
+        ("發不動", "電系", json.dumps(["啟動馬達故障"]), 1500, 3000, 20, json.dumps(["啟動馬達", "碳刷"]), "聽到喀喀聲但引擎不轉"),
+        ("發不動", "電系", json.dumps(["點火系統問題"]), 500, 1200, 10, json.dumps(["火星塞", "高壓線圈"]), "完全沒有發動聲音"),
+        ("漏油", "引擎", json.dumps(["油封老化", "墊片破損", "油管破裂"]), 500, 1000, 50, json.dumps(["油封", "墊片"]), "停車後地面有油漬"),
+        ("異音", "傳動", json.dumps(["普利珠磨損", "離合器打滑", "皮帶老化"]), 800, 1500, 40, json.dumps(["普利珠", "離合器"]), "起步或加速時有怪聲"),
+        ("異音", "傳動", json.dumps(["離合器打滑"]), 1200, 2500, 35, json.dumps(["離合器片", "離合器彈簧"]), "轉速拉高但車速不上去"),
+        ("煞車軟", "煞車", json.dumps(["煞車油不足", "來令片磨損", "碟盤變形"]), 300, 1500, 60, json.dumps(["煞車油", "來令片"]), "煞車拉桿壓到底才有效"),
+        ("耗油", "引擎", json.dumps(["空氣濾清器堵塞", "噴油嘴積碳", "火星塞老化"]), 500, 2000, 45, json.dumps(["空濾", "噴油嘴"]), "油耗比平常多 30% 以上"),
+        ("抖動", "引擎", json.dumps(["引擎腳老化", "傳動系統不平衡", "輪胎變形"]), 800, 2000, 40, json.dumps(["引擎腳", "普利盤"]), "怠速或行駛中明顯震動"),
+        ("儀表板燈亮", "電系", json.dumps(["引擎故障燈", "機油燈", "電瓶燈"]), 500, 3000, 50, json.dumps(["診斷器檢測"]), "不同燈號代表不同問題"),
+        ("輪胎沒氣", "輪胎", json.dumps(["胎壓不足", "輪胎破洞", "氣嘴漏氣"]), 50, 800, 70, json.dumps(["補胎片", "氣嘴"]), "先檢查是否有異物刺入"),
+        ("排氣管冒白煙", "引擎", json.dumps(["汽缸墊片燒毀", "活塞環磨損"]), 3000, 8000, 60, json.dumps(["墊片", "活塞環"]), "嚴重問題，需儘快檢修"),
+        ("電門轉了沒反應", "電系", json.dumps(["電門線斷裂", "控制器故障"]), 500, 2500, 50, json.dumps(["電門線", "控制器"]), "電動車常見問題"),
+        ("充電充不飽", "電系", json.dumps(["充電器故障", "電瓶老化", "充電座接觸不良"]), 500, 2000, 55, json.dumps(["充電器", "電瓶"]), "充電時間比平常久很多"),
+        ("方向燈不亮", "電系", json.dumps(["燈泡燒掉", "繼電器故障", "線路短路"]), 50, 500, 70, json.dumps(["燈泡", "繼電器"]), "先換燈泡試試看"),
+    ]
+    
+    c.executemany('''
+        INSERT INTO symptoms (keyword, category, possible_issues, price_low, price_high, probability, parts, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    ''', symptoms_data)
+    
+    # 載入維修廠資料 (範例)
+    shops_data = [
+        ("順欣車業", "台北市中山區南京東路三段 100 號", "02-25001234", 25.052, 121.538, 4.5, 128, json.dumps(["電系", "引擎"]), 1),
+        ("永盛機車行", "新北市板橋區文化路二段 200 號", "02-22567890", 25.015, 121.468, 4.2, 85, json.dumps(["傳動", "煞車"]), 1),
+        ("大台北機車", "台北市大安區羅斯福路三段 50 號", "02-23651234", 25.018, 121.533, 4.7, 256, json.dumps(["電系", "引擎", "傳動"]), 1),
+        ("捷運機車維修", "台北市信義區忠孝東路五段 80 號", "02-23456789", 25.041, 121.565, 4.0, 42, json.dumps(["輪胎", "煞車"]), 0),
+        ("老張機車", "新北市中和區中山路三段 120 號", "02-29456789", 24.998, 121.478, 4.8, 312, json.dumps(["引擎", "電系", "傳動", "煞車"]), 1),
+    ]
+    
+    c.executemany('''
+        INSERT INTO shops (name, address, phone, lat, lng, rating, review_count, specialties, is_verified)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', shops_data)
+    
+    conn.commit()
+    conn.close()
+    print("✅ 初始資料載入完成")
+
+# ============ AI 診斷引擎 ============
+
+def diagnose_symptom(symptom_text, bike_model="", bike_age=""):
+    """
+    簡易診斷引擎：關鍵字匹配 + 價格估算
+    未來可擴展為 GPT/Claude 整合
+    """
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    # 關鍵字匹配
+    keywords = ["發不動", "漏油", "異音", "煞車", "耗油", "抖動", "儀表板", "輪胎", "排氣管", "電門", "充電", "方向燈"]
+    matched_keyword = None
+    
+    for kw in keywords:
+        if kw in symptom_text:
+            matched_keyword = kw
+            break
+    
+    if not matched_keyword:
+        return {
+            "found": False,
+            "message": "抱歉，我還不太確定您的問題 🤔\n\n可以描述更具體一點嗎？例如：\n• 發不動、有異音、漏油\n• 煞車軟、耗油、抖動\n• 儀表板燈亮、輪胎沒氣\n\n或告訴我您的車型和車齡，我會更準確！"
+        }
+    
+    # 查詢資料庫
+    c.execute('''
+        SELECT category, possible_issues, price_low, price_high, probability, parts, notes
+        FROM symptoms WHERE keyword = ? ORDER BY probability DESC
+    ''', (matched_keyword,))
+    
+    results = c.fetchall()
+    conn.close()
+    
+    if not results:
+        return {"found": False, "message": "找不到相關資料，請換個說法試試看"}
+    
+    # 組裝診斷結果
+    issues = []
+    for row in results[:3]:  # 最多顯示 3 個
+        category, possible_issues_json, price_low, price_high, probability, parts_json, notes = row
+        issues.append({
+            "category": category,
+            "problems": json.loads(possible_issues_json),
+            "price_low": price_low,
+            "price_high": price_high,
+            "probability": probability,
+            "parts": json.loads(parts_json),
+            "notes": notes
+        })
+    
+    return {
+        "found": True,
+        "keyword": matched_keyword,
+        "issues": issues,
+        "bike_model": bike_model,
+        "bike_age": bike_age
+    }
+
+# ============ 訊息格式化 ============
+
+def format_diagnosis_reply(diagnosis):
+    """格式化診斷回覆訊息"""
+    if not diagnosis["found"]:
+        return diagnosis["message"]
+    
+    keyword = diagnosis["keyword"]
+    issues = diagnosis["issues"]
+    
+    reply = f"🔧 柴師傅診斷報告\n"
+    reply += f"症狀：{keyword}\n"
+    reply += f"{'='*30}\n\n"
+    
+    for i, issue in enumerate(issues, 1):
+        problems = "、".join(issue["problems"])
+        parts = "、".join(issue["parts"])
+        
+        reply += f"【可能 {i}】{problems}\n"
+        reply += f"   機率：{issue['probability']}%\n"
+        reply += f"   估價：${issue['price_low']:,} - ${issue['price_high']:,}\n"
+        reply += f"   零件：{parts}\n"
+        reply += f"   💡 {issue['notes']}\n\n"
+    
+    reply += f"{'='*30}\n"
+    reply += "📍 想找附近維修廠？\n"
+    reply += "輸入『附近廠商』或分享您的位置！\n\n"
+    reply += "⚠️ 以上為參考價格，實際費用以維修廠報價為準"
+    
+    return reply
+
+def get_nearby_shops(lat=25.033, lng=121.565, limit=3):
+    """取得附近維修廠 (簡易版，未來可接 Google Maps API)"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    
+    c.execute('''
+        SELECT name, address, phone, rating, review_count, specialties, is_verified
+        FROM shops WHERE is_active = 1
+        ORDER BY rating DESC, review_count DESC
+        LIMIT ?
+    ''', (limit,))
+    
+    shops = c.fetchall()
+    conn.close()
+    
+    if not shops:
+        return "目前暫無合作維修廠資料 😅"
+    
+    reply = "🏍️ 推薦維修廠\n"
+    reply += f"{'='*30}\n\n"
+    
+    for shop in shops:
+        name, address, phone, rating, review_count, specialties_json, is_verified = shop
+        specialties = "、".join(json.loads(specialties_json))
+        verified = "✅" if is_verified else ""
+        
+        reply += f"{verified} {name}\n"
+        reply += f"   ⭐ {rating} ({review_count} 則評價)\n"
+        reply += f"   📍 {address}\n"
+        reply += f"   📞 {phone}\n"
+        reply += f"   🔧 專長：{specialties}\n\n"
+    
+    return reply
+
+# ============ LINE Bot 路由 ============
+
+@app.route("/", methods=['GET'])
+def hello():
+    return "柴師傅機車維修估價機器人運作中！🏍️"
+
+@app.route("/webhook", methods=['POST'])
+def webhook():
+    """LINE Webhook 接收訊息"""
+    signature = request.headers.get('X-Line-Signature', '')
+    body = request.get_data(as_text=True)
+    
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    
+    return 'OK'
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text_message(event):
+    """處理文字訊息"""
+    user_id = event.source.user_id
+    text = event.message.text.strip()
+    
+    # 記錄對話
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute('INSERT INTO conversations (user_id, symptom) VALUES (?, ?)', (user_id, text))
+    conn.commit()
+    conn.close()
+    
+    # 指令判斷
+    if text in ["附近廠商", "維修廠", "推薦"]:
+        reply = get_nearby_shops()
+    elif text in ["幫助", "help", "?", "說明"]:
+        reply = """🏍️ 柴師傅使用說明
+
+直接描述您的機車問題，例如：
+• 「發不動，有喀喀聲」
+• 「起步有異音」
+• 「煞車變很軟」
+• 「最近很耗油」
+
+我也能幫您：
+• 輸入「附近廠商」找維修廠
+• 輸入「價格查詢」看常見維修價格
+• 輸入「我的車籍」記錄愛車資料
+
+有問題隨時問我！🔧"""
+    elif text in ["價格查詢", "常見價格"]:
+        reply = """💰 常見維修參考價格
+
+電系類：
+• 電瓶更換：$800 - $1,500
+• 啟動馬達：$1,500 - $3,000
+• 火星塞：$200 - $500
+
+傳動類：
+• 普利珠：$800 - $1,500
+• 離合器：$1,200 - $2,500
+• 傳動皮帶：$400 - $800
+
+煞車類：
+• 來令片：$300 - $800
+• 煞車油：$200 - $400
+• 碟盤：$800 - $1,500
+
+引擎類：
+• 換機油：$300 - $600
+• 空濾更換：$200 - $500
+• 墊片維修：$500 - $2,000
+
+⚠️ 以上為參考價，實際以維修廠報價為準"""
+    else:
+        # AI 診斷
+        diagnosis = diagnose_symptom(text)
+        reply = format_diagnosis_reply(diagnosis)
+    
+    # 發送回覆
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply)
+    )
+
+@handler.add(MessageEvent, message=LocationMessage)
+def handle_location_message(event):
+    """處理位置訊息"""
+    lat = event.message.latitude
+    lng = event.message.longitude
+    
+    reply = get_nearby_shops(lat, lng)
+    
+    line_bot_api.reply_message(
+        event.reply_token,
+        TextSendMessage(text=reply)
+    )
+
+# ============ 啟動 ============
+
+if __name__ == "__main__":
+    print("🚀 初始化柴師傅機車維修估價機器人...")
+    init_db()
+    init_sample_data()
+    print("✅ 準備完成！啟動伺服器...")
+    app.run(host='0.0.0.0', port=5000, debug=True)
