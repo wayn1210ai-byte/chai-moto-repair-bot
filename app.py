@@ -30,20 +30,37 @@ app = Flask(__name__)
 # 關閉 Flask 自動 JSON 解析，避免 400 錯誤
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB
 
-# LINE Bot 設定
-LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', 'your-token')
-LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', 'your-secret')
+# LINE Bot 設定 - 從環境變數讀取
+LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
+LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', '')
+
+# 檢查環境變數
+print(f"[INIT] LINE_TOKEN 長度: {len(LINE_CHANNEL_ACCESS_TOKEN)}")
+print(f"[INIT] LINE_SECRET 長度: {len(LINE_CHANNEL_SECRET)}")
 
 # Gemini 設定
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+print(f"[INIT] GEMINI_KEY 長度: {len(GEMINI_API_KEY)}")
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+    print("[INIT] Gemini 已設定")
+else:
+    print("[INIT] ⚠️ 沒有 Gemini API Key")
 
-line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(LINE_CHANNEL_SECRET)
+# 初始化 LINE Bot
+if LINE_CHANNEL_ACCESS_TOKEN and LINE_CHANNEL_SECRET:
+    line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
+    handler = WebhookHandler(LINE_CHANNEL_SECRET)
+    print("[INIT] LINE Bot 已初始化")
+else:
+    print("[INIT] ⚠️ LINE 環境變數未設定！")
+    line_bot_api = None
+    handler = None
 
-# 資料庫路徑
-DB_PATH = '/home/wayn1210/chai-moto-bot/moto_repair.db'
+# 資料庫路徑 - 使用相對路徑，避免 Render 上路徑問題
+DB_PATH = os.path.join(os.path.dirname(__file__), 'moto_repair.db')
+print(f"[INIT] 資料庫路徑: {DB_PATH}")
 
 # ============ 資料庫操作 ============
 
@@ -172,7 +189,6 @@ def init_sample_data():
 def diagnose_symptom(symptom_text, bike_model="", bike_age=""):
     """
     簡易診斷引擎：關鍵字匹配 + 價格估算
-    未來可擴展為 GPT/Claude 整合
     """
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -270,7 +286,7 @@ def gemini_diagnose(symptom_text, bike_model="", bike_age=""):
         
         return response.text
     except Exception as e:
-        print(f"Gemini診斷錯誤: {e}")
+        print(f"[GEMINI] 診斷錯誤: {e}")
         return None
 
 # ============ 訊息格式化 ============
@@ -305,7 +321,7 @@ def format_diagnosis_reply(diagnosis):
     return reply
 
 def get_nearby_shops(lat=25.033, lng=121.565, limit=3):
-    """取得附近維修廠 (簡易版，未來可接 Google Maps API)"""
+    """取得附近維修廠"""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
@@ -338,159 +354,6 @@ def get_nearby_shops(lat=25.033, lng=121.565, limit=3):
     
     return reply
 
-# ============ LINE Bot 路由 ============
-
-@app.route("/", methods=['GET', 'POST'])
-def hello():
-    if request.method == 'POST':
-        return 'OK', 200
-    return "柴師傅機車維修估價機器人運作中！🏍️"
-
-@app.route("/test", methods=['GET', 'POST'])
-def test():
-    """測試端點"""
-    return 'OK', 200
-
-@app.route("/webhook", methods=['POST', 'GET'])
-def webhook():
-    """LINE Webhook 接收訊息 - 始終回傳 200 確保 LINE 不會切斷連線"""
-    if request.method == 'GET':
-        return 'Webhook is running! 🏍️', 200
-    
-    # 手動取得 raw body，避免 Flask 自動解析 JSON
-    body = request.get_data(as_text=True)
-    signature = request.headers.get('X-Line-Signature', '')
-    
-    # 記錄請求以便除錯
-    print(f"[WEBHOOK] Received request, body length: {len(body)}, signature present: {bool(signature)}")
-    
-    # 沒有 signature 也回 200（LINE 測試用）
-    if not signature:
-        print("[WEBHOOK] No signature, returning 200")
-        return 'OK', 200
-    
-    try:
-        handler.handle(body, signature)
-        print("[WEBHOOK] Handler processed successfully")
-    except InvalidSignatureError:
-        # Signature 錯誤也回 200，但記錄下來
-        print(f"[WEBHOOK] Invalid signature, but returning 200 to keep LINE connected")
-    except Exception as e:
-        print(f"[WEBHOOK] Error: {e}")
-    
-    # 始終回傳 200，避免 LINE 認為 Webhook 故障
-    return 'OK', 200
-
-@handler.add(MessageEvent, message=TextMessage)
-def handle_text_message(event):
-    """處理文字訊息"""
-    user_id = event.source.user_id
-    text = event.message.text.strip()
-    
-    # 記錄對話
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute('INSERT INTO conversations (user_id, symptom) VALUES (?, ?)', (user_id, text))
-    conn.commit()
-    conn.close()
-    
-    # 指令判斷 - 支援模糊匹配（包含關鍵字即可）
-    text_lower = text.lower().strip()
-    
-    if any(k in text_lower for k in ["附近廠商", "維修廠", "推薦", "廠商"]):
-        reply = get_nearby_shops()
-    elif any(k in text_lower for k in ["幫助", "help", "說明", "使用", "功能", "指令"]):
-        reply = """🏍️ 柴師傅使用說明
-
-【快速診斷】
-直接描述您的機車問題，例如：
-• 「發不動，有喀喀聲」
-• 「起步有異音」
-• 「煞車變很軟」
-• 「最近很耗油」
-
-【功能選單】
-🔧 症狀診斷 — AI 智能分析問題
-💰 價格查詢 — 常見維修價目表
-🏪 附近廠商 — 推薦合作維修廠
-📋 維修紀錄 — 查看您的歷史紀錄
-⭐ 評價回饋 — 給維修廠評分
-
-【注意事項】
-⚠️ 以上為AI初步估價，實際價格以現場檢測為準
-
-有問題隨時問我！🔧"""
-    elif any(k in text_lower for k in ["價格", "價錢", "多少錢", "費用", "報價"]):
-        reply = """💰 常見維修參考價格
-
-電系類：
-• 電瓶更換：$800 - $1,500
-• 啟動馬達：$1,500 - $3,000
-• 火星塞：$200 - $500
-
-傳動類：
-• 普利珠：$800 - $1,500
-• 離合器：$1,200 - $2,500
-• 傳動皮帶：$400 - $800
-
-煞車類：
-• 來令片：$300 - $800
-• 煞車油：$200 - $400
-• 碟盤：$800 - $1,500
-
-引擎類：
-• 換機油：$300 - $600
-• 空濾更換：$200 - $500
-• 墊片維修：$500 - $2,000
-
-⚠️ 以上為參考價，實際以維修廠報價為準"""
-    elif any(k in text_lower for k in ["症狀", "診斷", "問題", "故障", "壞掉", "怎麼辦"]):
-        # 使用關鍵字匹配診斷
-        diagnosis = diagnose_symptom(text)
-        reply = format_diagnosis_reply(diagnosis)
-    elif any(k in text_lower for k in ["紀錄", "歷史", "我的紀錄", "維修紀錄"]):
-        reply = get_user_history(user_id)
-    elif any(k in text_lower for k in ["評價", "打分", "回饋", "滿意度", "評分"]):
-        reply = """⭐ 維修廠評價
-
-請告訴我：
-1. 您去了哪家維修廠？
-2. 維修項目是什麼？
-3. 實際花費多少？
-4. 滿意度 1-5 星？
-
-格式範例：
-「大台北機車，換電瓶，1200元，5星」
-
-小柴子會幫您記錄，讓其他車友參考！📝"""
-    else:
-        # AI 診斷：先嘗試 Gemini，失敗則用關鍵字匹配
-        gemini_result = gemini_diagnose(text)
-        if gemini_result:
-            reply = f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 也想看傳統診斷？輸入「傳統診斷」"
-        else:
-            diagnosis = diagnose_symptom(text)
-            reply = format_diagnosis_reply(diagnosis)
-    
-    # 發送回覆
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
-
-@handler.add(MessageEvent, message=LocationMessage)
-def handle_location_message(event):
-    """處理位置訊息"""
-    lat = event.message.latitude
-    lng = event.message.longitude
-    
-    reply = get_nearby_shops(lat, lng)
-    
-    line_bot_api.reply_message(
-        event.reply_token,
-        TextSendMessage(text=reply)
-    )
-
 def get_user_history(user_id):
     """取得用戶維修歷史"""
     conn = sqlite3.connect(DB_PATH)
@@ -515,6 +378,187 @@ def get_user_history(user_id):
         reply += f"   時間：{created_at}\n\n"
     
     return reply
+
+# ============ LINE Bot 路由 ============
+
+@app.route("/", methods=['GET', 'POST'])
+def hello():
+    if request.method == 'POST':
+        return 'OK', 200
+    return "柴師傅機車維修估價機器人運作中！🏍️"
+
+@app.route("/test", methods=['GET', 'POST'])
+def test():
+    """測試端點"""
+    return 'OK', 200
+
+@app.route("/webhook", methods=['POST', 'GET'])
+def webhook():
+    """LINE Webhook 接收訊息"""
+    if request.method == 'GET':
+        return 'Webhook is running! 🏍️', 200
+    
+    # 手動取得 raw body，避免 Flask 自動解析 JSON
+    body = request.get_data(as_text=True)
+    signature = request.headers.get('X-Line-Signature', '')
+    
+    # 記錄請求以便除錯
+    print(f"[WEBHOOK] Received request, body length: {len(body)}, signature present: {bool(signature)}")
+    
+    # 沒有 signature 也回 200（LINE 測試用）
+    if not signature:
+        print("[WEBHOOK] No signature, returning 200")
+        return 'OK', 200
+    
+    # 如果 handler 沒初始化，直接回 200
+    if not handler:
+        print("[WEBHOOK] Handler not initialized, returning 200")
+        return 'OK', 200
+    
+    try:
+        handler.handle(body, signature)
+        print("[WEBHOOK] Handler processed successfully")
+    except InvalidSignatureError:
+        # Signature 錯誤也回 200，但記錄下來
+        print(f"[WEBHOOK] Invalid signature, but returning 200 to keep LINE connected")
+    except Exception as e:
+        print(f"[WEBHOOK] Error: {e}")
+    
+    # 始終回傳 200，避免 LINE 認為 Webhook 故障
+    return 'OK', 200
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_text_message(event):
+    """處理文字訊息"""
+    try:
+        user_id = event.source.user_id
+        text = event.message.text.strip()
+        
+        print(f"[MSG] User: {user_id}, Text: {text}")
+        
+        # 記錄對話
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute('INSERT INTO conversations (user_id, symptom) VALUES (?, ?)', (user_id, text))
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            print(f"[DB] 記錄對話失敗: {e}")
+        
+        # 指令判斷 - 支援模糊匹配（包含關鍵字即可）
+        text_lower = text.lower().strip()
+        
+        # 預設回覆
+        reply = None
+        
+        if any(k in text_lower for k in ["附近廠商", "維修廠", "推薦", "廠商"]):
+            reply = get_nearby_shops()
+        elif any(k in text_lower for k in ["幫助", "help", "說明", "使用", "功能", "指令"]):
+            reply = """🏍️ 柴師傅使用說明
+
+【快速診斷】
+直接描述您的機車問題，例如：
+• 「發不動，有喀喀聲」
+• 「起步有異音」
+• 「煞車變很軟」
+• 「最近很耗油」
+
+【功能選單】
+🔧 症狀診斷 — AI 智能分析問題
+💰 價格查詢 — 常見維修價目表
+🏪 附近廠商 — 推薦合作維修廠
+📋 維修紀錄 — 查看您的歷史紀錄
+⭐ 評價回饋 — 給維修廠評分
+
+【注意事項】
+⚠️ 以上為AI初步估價，實際價格以現場檢測為準
+
+有問題隨時問我！🔧"""
+        elif any(k in text_lower for k in ["價格", "價錢", "多少錢", "費用", "報價"]):
+            reply = """💰 常見維修參考價格
+
+電系類：
+• 電瓶更換：$800 - $1,500
+• 啟動馬達：$1,500 - $3,000
+• 火星塞：$200 - $500
+
+傳動類：
+• 普利珠：$800 - $1,500
+• 離合器：$1,200 - $2,500
+• 傳動皮帶：$400 - $800
+
+煞車類：
+• 來令片：$300 - $800
+• 煞車油：$200 - $400
+• 碟盤：$800 - $1,500
+
+引擎類：
+• 換機油：$300 - $600
+• 空濾更換：$200 - $500
+• 墊片維修：$500 - $2,000
+
+⚠️ 以上為參考價，實際以維修廠報價為準"""
+        elif any(k in text_lower for k in ["症狀", "診斷", "問題", "故障", "壞掉", "怎麼辦"]):
+            # 使用關鍵字匹配診斷
+            diagnosis = diagnose_symptom(text)
+            reply = format_diagnosis_reply(diagnosis)
+        elif any(k in text_lower for k in ["紀錄", "歷史", "我的紀錄", "維修紀錄"]):
+            reply = get_user_history(user_id)
+        elif any(k in text_lower for k in ["評價", "打分", "回饋", "滿意度", "評分"]):
+            reply = """⭐ 維修廠評價
+
+請告訴我：
+1. 您去了哪家維修廠？
+2. 維修項目是什麼？
+3. 實際花費多少？
+4. 滿意度 1-5 星？
+
+格式範例：
+「大台北機車，換電瓶，1200元，5星」
+
+小柴子會幫您記錄，讓其他車友參考！📝"""
+        else:
+            # AI 診斷：先嘗試 Gemini，失敗則用關鍵字匹配
+            gemini_result = gemini_diagnose(text)
+            if gemini_result:
+                reply = f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 也想看傳統診斷？輸入「傳統診斷」"
+            else:
+                diagnosis = diagnose_symptom(text)
+                reply = format_diagnosis_reply(diagnosis)
+        
+        # 發送回覆
+        if reply and line_bot_api:
+            try:
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=reply)
+                )
+                print(f"[MSG] Reply sent successfully")
+            except Exception as e:
+                print(f"[MSG] Failed to send reply: {e}")
+        else:
+            print(f"[MSG] No reply or line_bot_api not available")
+            
+    except Exception as e:
+        print(f"[MSG] Error in handle_text_message: {e}")
+
+@handler.add(MessageEvent, message=LocationMessage)
+def handle_location_message(event):
+    """處理位置訊息"""
+    try:
+        lat = event.message.latitude
+        lng = event.message.longitude
+        
+        reply = get_nearby_shops(lat, lng)
+        
+        if line_bot_api:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text=reply)
+            )
+    except Exception as e:
+        print(f"[LOC] Error: {e}")
 
 # ============ 啟動 ============
 
