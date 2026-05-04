@@ -341,9 +341,12 @@ def get_nearby_shops(lat=25.033, lng=121.565, limit=3):
 def hello():
     return "柴師傅機車維修估價機器人運作中！🏍️"
 
-@app.route("/webhook", methods=['POST'])
+@app.route("/webhook", methods=['POST', 'GET'])
 def webhook():
     """LINE Webhook 接收訊息"""
+    if request.method == 'GET':
+        return 'Webhook is running! 🏍️', 200
+    
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
     
