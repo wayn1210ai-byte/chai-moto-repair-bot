@@ -7,7 +7,7 @@
 import os
 import json
 import sqlite3
-import openai
+import google.generativeai as genai
 from datetime import datetime
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
@@ -31,9 +31,10 @@ app = Flask(__name__)
 LINE_CHANNEL_ACCESS_TOKEN = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', 'your-token')
 LINE_CHANNEL_SECRET = os.getenv('LINE_CHANNEL_SECRET', 'your-secret')
 
-# OpenAI 設定
-OPENAI_API_KEY = os.getenv('OPENAI_API_KEY', '')
-openai.api_key = OPENAI_API_KEY
+# Gemini 設定
+GEMINI_API_KEY = os.getenv('GEMINI_API_KEY', '')
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 line_bot_api = LineBotApi(LINE_CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(LINE_CHANNEL_SECRET)
@@ -222,11 +223,11 @@ def diagnose_symptom(symptom_text, bike_model="", bike_age=""):
         "bike_age": bike_age
     }
 
-# ============ GPT AI 診斷 ============
+# ============ Gemini AI 診斷 ============
 
-def gpt_diagnose(symptom_text, bike_model="", bike_age=""):
-    """使用 GPT-4 進行智能診斷"""
-    if not OPENAI_API_KEY:
+def gemini_diagnose(symptom_text, bike_model="", bike_age=""):
+    """使用 Google Gemini 進行智能診斷"""
+    if not GEMINI_API_KEY:
         return None
     
     try:
@@ -255,19 +256,18 @@ def gpt_diagnose(symptom_text, bike_model="", bike_age=""):
 
 請務必提醒：此為AI初步估價，實際價格以現場檢測為準。"""
 
-        response = openai.ChatCompletion.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "你是一位親切專業的台灣機車維修技師，用繁體中文回答。"},
-                {"role": "user", "content": prompt}
-            ],
-            temperature=0.7,
-            max_tokens=800
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        response = model.generate_content(
+            prompt,
+            generation_config=genai.types.GenerationConfig(
+                temperature=0.7,
+                max_output_tokens=800
+            )
         )
         
-        return response.choices[0].message.content
+        return response.text
     except Exception as e:
-        print(f"GPT診斷錯誤: {e}")
+        print(f"Gemini診斷錯誤: {e}")
         return None
 
 # ============ 訊息格式化 ============
@@ -415,10 +415,10 @@ def handle_text_message(event):
         diagnosis = diagnose_symptom(text)
         reply = format_diagnosis_reply(diagnosis)
     else:
-        # AI 診斷：先嘗試 GPT，失敗則用關鍵字匹配
-        gpt_result = gpt_diagnose(text)
-        if gpt_result:
-            reply = f"🤖 **AI 智能診斷**\n\n{gpt_result}\n\n---\n💡 也想看傳統診斷？輸入「傳統診斷」"
+        # AI 診斷：先嘗試 Gemini，失敗則用關鍵字匹配
+        gemini_result = gemini_diagnose(text)
+        if gemini_result:
+            reply = f"🤖 **Gemini AI 智能診斷**\n\n{gemini_result}\n\n---\n💡 也想看傳統診斷？輸入「傳統診斷」"
         else:
             diagnosis = diagnose_symptom(text)
             reply = format_diagnosis_reply(diagnosis)
