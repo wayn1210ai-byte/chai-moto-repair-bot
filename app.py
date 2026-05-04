@@ -337,9 +337,16 @@ def get_nearby_shops(lat=25.033, lng=121.565, limit=3):
 
 # ============ LINE Bot 路由 ============
 
-@app.route("/", methods=['GET'])
+@app.route("/", methods=['GET', 'POST'])
 def hello():
+    if request.method == 'POST':
+        return 'OK', 200
     return "柴師傅機車維修估價機器人運作中！🏍️"
+
+@app.route("/test", methods=['GET', 'POST'])
+def test():
+    """測試端點"""
+    return 'OK', 200
 
 @app.route("/webhook", methods=['POST', 'GET'])
 def webhook():
