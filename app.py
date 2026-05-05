@@ -280,6 +280,81 @@ def webhook():
     # 始終回傳 200
     return 'OK', 200
 
+@app.route("/reset", methods=['GET'])
+def reset_line():
+    """重設 LINE Rich Menu 和 Webhook"""
+    import requests
+    
+    token = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
+    if not token:
+        return '❌ LINE_CHANNEL_ACCESS_TOKEN 未設定', 500
+    
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    
+    results = []
+    
+    # 1. 刪除所有 Rich Menu
+    try:
+        resp = requests.get("https://api.line.me/v2/bot/richmenu/list", headers=headers, timeout=10)
+        if resp.status_code == 200:
+            menus = resp.json().get('richmenus', [])
+            for menu in menus:
+                menu_id = menu['richMenuId']
+                del_resp = requests.delete(f"https://api.line.me/v2/bot/richmenu/{menu_id}", headers=headers, timeout=10)
+                results.append(f"刪除 Rich Menu {menu_id}: {del_resp.status_code}")
+    except Exception as e:
+        results.append(f"刪除 Rich Menu 錯誤: {e}")
+    
+    # 2. 建立新 Rich Menu
+    rich_menu = {
+        "size": {"width": 2500, "height": 1686},
+        "selected": True,
+        "name": "柴師傅主選單",
+        "chatBarText": "🏍️ 柴師傅功能選單",
+        "areas": [
+            {"bounds": {"x": 0, "y": 0, "width": 833, "height": 843}, "action": {"type": "message", "text": "🔧 症狀診斷"}},
+            {"bounds": {"x": 833, "y": 0, "width": 834, "height": 843}, "action": {"type": "message", "text": "💰 價格查詢"}},
+            {"bounds": {"x": 1667, "y": 0, "width": 833, "height": 843}, "action": {"type": "message", "text": "🏪 附近廠商"}},
+            {"bounds": {"x": 0, "y": 843, "width": 833, "height": 843}, "action": {"type": "message", "text": "📋 維修紀錄"}},
+            {"bounds": {"x": 833, "y": 843, "width": 834, "height": 843}, "action": {"type": "message", "text": "⭐ 評價回饋"}},
+            {"bounds": {"x": 1667, "y": 843, "width": 833, "height": 843}, "action": {"type": "message", "text": "❓ 使用說明"}}
+        ]
+    }
+    
+    try:
+        resp = requests.post("https://api.line.me/v2/bot/richmenu", headers=headers, json=rich_menu, timeout=10)
+        if resp.status_code == 200:
+            menu_id = resp.json()["richMenuId"]
+            results.append(f"✅ Rich Menu 建立成功: {menu_id}")
+            
+            # 設定為預設
+            set_resp = requests.post(
+                f"https://api.line.me/v2/bot/user/all/richmenu/{menu_id}",
+                headers=headers, timeout=10
+            )
+            results.append(f"設定預設 Rich Menu: {set_resp.status_code}")
+        else:
+            results.append(f"❌ Rich Menu 建立失敗: {resp.status_code}")
+    except Exception as e:
+        results.append(f"建立 Rich Menu 錯誤: {e}")
+    
+    # 3. 設定 Webhook
+    try:
+        resp = requests.put(
+            "https://api.line.me/v2/bot/channel/webhook/endpoint",
+            headers=headers,
+            json={"endpoint": "https://chai-moto-repair-bot.onrender.com/webhook"},
+            timeout=10
+        )
+        results.append(f"Webhook 設定: {resp.status_code}")
+    except Exception as e:
+        results.append(f"Webhook 設定錯誤: {e}")
+    
+    return '<br>'.join(results), 200
+
 # ============ 啟動 ============
 if __name__ == "__main__":
     print("🚀 啟動柴師傅機車維修估價機器人...")
