@@ -280,6 +280,77 @@ def webhook():
     # 始終回傳 200
     return 'OK', 200
 
+@app.route("/diag", methods=['GET'])
+def diag():
+    """診斷端點 - 檢查所有元件狀態"""
+    import requests as req
+    result = []
+    result.append("=== 🔍 柴師傅診斷報告 ===")
+    result.append("")
+    
+    # 1. LINE Token
+    token = os.getenv('LINE_CHANNEL_ACCESS_TOKEN', '')
+    result.append(f"[LINE Token] 長度: {len(token)}")
+    if token:
+        try:
+            r = req.get("https://api.line.me/v2/bot/channel/webhook/endpoint",
+                        headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            result.append(f"[LINE Webhook] API回覆: {r.status_code}")
+            if r.status_code == 200:
+                data = r.json()
+                result.append(f"[LINE Webhook] 目前設定: {data.get('endpoint', '無')}")
+        except Exception as e:
+            result.append(f"[LINE Webhook] 查詢錯誤: {e}")
+        
+        # 檢查 LINE Bot Info
+        try:
+            r = req.get("https://api.line.me/v2/bot/info",
+                        headers={"Authorization": f"Bearer {token}"}, timeout=10)
+            result.append(f"[LINE Bot Info] 狀態: {r.status_code}")
+            if r.status_code == 200:
+                info = r.json()
+                result.append(f"  Bot名稱: {info.get('displayName', '未知')}")
+                result.append(f"  用戶ID: {info.get('userId', '未知')}")
+        except Exception as e:
+            result.append(f"[LINE Bot Info] 錯誤: {e}")
+    
+    # 2. Gemini API
+    gemini_key = os.getenv('GEMINI_API_KEY', '')
+    result.append(f"")
+    result.append(f"[Gemini Key] 長度: {len(gemini_key)}")
+    if gemini_key:
+        try:
+            import google.generativeai as genai
+            genai.configure(api_key=gemini_key)
+            model = genai.GenerativeModel('gemini-2.0-flash')
+            resp = model.generate_content("請回答OK", generation_config=genai.types.GenerationConfig(max_output_tokens=10))
+            result.append(f"[Gemini] 測試成功: {resp.text[:50]}")
+        except Exception as e:
+            result.append(f"[Gemini] 測試失敗: {e}")
+    
+    # 3. Python Packages
+    result.append(f"")
+    result.append(f"[套件版本]")
+    import sys
+    result.append(f"  Python: {sys.version}")
+    try:
+        import linebot
+        result.append(f"  line-bot-sdk: {linebot.__version__ if hasattr(linebot, '__version__') else 'OK'}")
+    except:
+        result.append(f"  line-bot-sdk: ❌ 未安裝")
+    try:
+        import google.generativeai
+        result.append(f"  google-generativeai: OK")
+    except:
+        result.append(f"  google-generativeai: ❌ 未安裝")
+    try:
+        import flask
+        result.append(f"  flask: {flask.__version__}")
+    except:
+        result.append(f"  flask: ❌ 未安裝")
+    
+    return '<br>'.join(result), 200
+
 @app.route("/reset", methods=['GET'])
 def reset_line():
     """重設 LINE Rich Menu 和 Webhook"""
